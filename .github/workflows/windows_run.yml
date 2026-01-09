@@ -1,0 +1,35 @@
+name: Windows Toutiao Bot
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 每小时运行一次 (UTC时间)
+  workflow_dispatch:      # 允许手动点击按钮运行
+
+jobs:
+  run-bot:
+    runs-on: windows-latest  # 指定使用 Windows 环境
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
+
+      - name: 执行发布脚本
+        run: python toutiao_auto.py
+
+      - name: 自动保存发布记录
+        # 如果脚本更新了 last_published_id.txt，将其存回仓库
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Action"
+          git add last_published_id.txt
+          git commit -m "Update last published ID" || exit 0
+          git push
