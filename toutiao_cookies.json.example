@@ -1,0 +1,21 @@
+[
+  {
+    "domain": ".toutiao.com",
+    "expiry": 1799408486,
+    "httpOnly": true,
+    "name": "ttwid",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "YOUR_COOKIE_VALUE_HERE"
+  },
+  {
+    "domain": "mp.toutiao.com",
+    "httpOnly": false,
+    "name": "csrf_session_id",
+    "path": "/",
+    "sameSite": "None",
+    "secure": true,
+    "value": "YOUR_COOKIE_VALUE_HERE"
+  }
+]
