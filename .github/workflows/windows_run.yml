@@ -22,11 +22,24 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      - name: 还原 Cookie 文件
+        # 使用 PowerShell 将 Secret 中的 JSON 文本写回成文件，供 Python 读取
+        shell: pwsh
+        run: |
+          $env:COOKIE_DATA | Out-File -FilePath toutiao_cookies.json -Encoding utf8
+        env:
+          COOKIE_DATA: ${{ secrets.TOUTIAO_COOKIES }}
+
       - name: 执行发布脚本
+        # 显式注入环境变量，解决你遇到的“未配置 NEWS_API_URL”报错
         run: python toutiao_auto.py
+        env:
+          NEWS_API_URL: ${{ secrets.NEWS_API_URL }}
+          NEWS_API_PARAMS: ${{ secrets.NEWS_API_PARAMS }}
 
       - name: 自动保存发布记录
-        # 如果脚本更新了 last_published_id.txt，将其存回仓库
+        # 如果脚本更新了 last_published_id.txt，将其存回仓库防止重复发布
+        shell: bash
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Action"
