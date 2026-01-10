@@ -43,7 +43,7 @@ try:
 except json.JSONDecodeError:
     NEWS_PARAMS = {}
 
-HEADLESS = False
+HEADLESS = False  # 保持非 headless 模式，避免被封禁风险
 FETCH_INTERVAL_SEC = 60          
 WAIT_SEC = 25     
 
@@ -138,13 +138,59 @@ def publish_micro(driver, news: dict):
     wait = WebDriverWait(driver, WAIT_SEC)
     
     try:
-        editor = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="root"]//p')))
-        editor.send_keys(final_text)
+        # 等待页面完全加载
         time.sleep(2)
-
-        # 点击发布
-        btn = driver.find_element(By.XPATH, '//*[@id="root"]//button[contains(., "发布")]')
-        btn.click()
+        
+        # 等待编辑器出现
+        editor = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="root"]//p')))
+        # 确保编辑器可见且可交互
+        wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="root"]//p')))
+        
+        # 清空编辑器并输入内容
+        editor.clear()
+        editor.send_keys(final_text)
+        
+        # 等待内容输入完成，可能有验证逻辑
+        time.sleep(2)
+        
+        # 尝试关闭可能的弹窗或提示（如果有）
+        try:
+            close_elements = driver.find_elements(By.XPATH, "//*[contains(@class, 'close') or contains(@aria-label, '关闭') or contains(@class, 'modal-close')]")
+            for elem in close_elements[:3]:  # 只尝试前3个，避免过多尝试
+                try:
+                    if elem.is_displayed():
+                        elem.click()
+                        time.sleep(0.5)
+                except:
+                    pass
+        except:
+            pass
+        
+        # 等待发布按钮可点击，并滚动到可见位置
+        btn = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="root"]//button[contains(., "发布")]')))
+        
+        # 滚动到按钮位置，确保在视口中
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'auto'});", btn)
+        time.sleep(1)  # 等待滚动完成
+        
+        # 再次检查按钮是否可点击
+        btn = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="root"]//button[contains(., "发布")]')))
+        
+        # 尝试多种点击方式
+        try:
+            # 方法1: 普通点击
+            btn.click()
+            log("publish", "使用普通点击方式")
+        except Exception as click_error:
+            log("publish", f"普通点击失败: {type(click_error).__name__}，尝试 JavaScript 点击")
+            try:
+                # 方法2: JavaScript 点击（绕过遮挡）
+                driver.execute_script("arguments[0].click();", btn)
+                log("publish", "使用 JavaScript 点击方式")
+            except Exception as js_error:
+                err("publish", f"JavaScript 点击也失败: {repr(js_error)}")
+                raise
+        
         log("publish", "已点击发布按钮，等待发布成功跳转...")
         
         # 等待 URL 跳转到列表页，表示发布成功
@@ -154,6 +200,14 @@ def publish_micro(driver, news: dict):
         return True
     except Exception as e:
         err("publish", f"发布过程出错: {repr(e)}")
+        # 在 CI 环境中，尝试保存截图以便调试（如果配置了截图功能）
+        if os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true":
+            try:
+                screenshot_path = f"error_screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                driver.save_screenshot(screenshot_path)
+                log("publish", f"错误截图已保存: {screenshot_path}")
+            except:
+                pass
         return False
 
 # ================== 主逻辑 ==================
@@ -164,8 +218,28 @@ def main():
     last_id = last_file.read_text().strip() if last_file.exists() else ""
 
     chrome_options = Options()
-    if HEADLESS: chrome_options.add_argument("--headless=new")
+    # 保持非 headless 模式，避免被封禁风险
+    
+    # 设置窗口大小，确保元素可见（解决窗口尺寸问题）
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--start-maximized")
+    
+    # CI 环境的额外优化（保持非 headless 模式）
+    if os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true":
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        # 注意：在 Windows CI 环境中，非 headless 模式也能正常运行
+    
     driver = webdriver.Chrome(options=chrome_options)
+    # 显式设置窗口大小，确保元素可见
+    try:
+        driver.set_window_size(1920, 1080)
+    except:
+        # 如果设置失败，尝试最大化窗口
+        try:
+            driver.maximize_window()
+        except:
+            pass
 
     try:
         # 1. Cookie 优先复用逻辑
