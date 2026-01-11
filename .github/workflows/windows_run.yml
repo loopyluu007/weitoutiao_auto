@@ -1,48 +1,57 @@
-name: Windows Toutiao Bot
+name: Windows Toutiao Bot (Every 4 Hours)
 
 on:
   schedule:
-    - cron: '0 * * * *'  # 每小时运行一次 (UTC时间)
-  workflow_dispatch:      # 允许手动点击按钮运行
+    # 每 4 小时运行一次 (UTC时间 00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+    - cron: '0 */4 * * *'
+  workflow_dispatch:      # 允许你随时手动点击按钮立即运行一次
+
+permissions:
+  contents: write         # 必须开启，否则脚本无法将 last_published_id.txt 推回仓库
 
 jobs:
   run-bot:
-    runs-on: windows-latest  # 指定使用 Windows 环境
+    runs-on: windows-latest
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整拉取历史，方便 git push
 
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'    # 开启缓存，加快依赖安装速度
 
       - name: 安装依赖
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: 还原 Cookie 文件
-        # 使用 PowerShell 将 Secret 中的 JSON 文本写回成文件，供 Python 读取
         shell: pwsh
         run: |
-          $env:COOKIE_DATA | Out-File -FilePath toutiao_cookies.json -Encoding utf8
+          # 使用 Set-Content 确保生成 Python 易读的无 BOM UTF8 文件
+          $env:COOKIE_DATA | Set-Content -Path toutiao_cookies.json -Encoding utf8
         env:
           COOKIE_DATA: ${{ secrets.TOUTIAO_COOKIES }}
 
       - name: 执行发布脚本
-        # 显式注入环境变量，解决你遇到的“未配置 NEWS_API_URL”报错
         run: python toutiao_auto.py
         env:
           NEWS_API_URL: ${{ secrets.NEWS_API_URL }}
           NEWS_API_PARAMS: ${{ secrets.NEWS_API_PARAMS }}
 
       - name: 自动保存发布记录
-        # 如果脚本更新了 last_published_id.txt，将其存回仓库防止重复发布
         shell: bash
         run: |
           git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Action"
-          git add last_published_id.txt
-          git commit -m "Update last published ID" || exit 0
-          git push
+          git config --local user.name "github-actions[bot]"
+          # 检查文件是否有变动，防止空提交报错
+          if [ -f "last_published_id.txt" ]; then
+            git add last_published_id.txt
+            git commit -m "chore: update last published ID [skip ci]" || echo "No changes to commit"
+            git push
+          fi
