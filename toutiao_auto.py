@@ -106,6 +106,10 @@ def get_latest_news() -> dict | None:
         err("api", "未配置 NEWS_API_URL 环境变量")
         return None
     
+    # 调试日志：输出配置信息
+    log("api", f"API URL: {NEWS_API_URL}")
+    log("api", f"API 参数: {NEWS_PARAMS}")
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json"
@@ -113,10 +117,29 @@ def get_latest_news() -> dict | None:
     try:
         resp = requests.get(NEWS_API_URL, params=NEWS_PARAMS, headers=headers, timeout=20, verify=True)
         resp.raise_for_status()
-        items = resp.json().get("items", [])
-        return items[0] if items else None
+        data = resp.json()
+        items = data.get("items", [])
+        
+        if items:
+            news = items[0]
+            # 调试日志：检查返回的数据结构
+            has_zh = news.get("content_multilingual", {}).get("zh") if isinstance(news.get("content_multilingual"), dict) else None
+            if has_zh:
+                log("api", f"找到中文内容: {has_zh.get('title', '')[:50]}...")
+            else:
+                log("api", "警告：返回的新闻没有中文内容")
+                log("api", f"可用字段: {list(news.keys())}")
+                if news.get("content_multilingual"):
+                    log("api", f"content_multilingual 语言: {list(news.get('content_multilingual', {}).keys())}")
+            
+            return news
+        else:
+            log("api", "API 返回的 items 为空")
+            return None
     except Exception as e:
         err("api", f"获取新闻失败: {repr(e)}")
+        import traceback
+        err("api", traceback.format_exc())
         return None
 
 # ================== 发布逻辑 ==================
@@ -128,8 +151,21 @@ def extract_content_from_summary(summary) -> str:
 
 def publish_micro(driver, news: dict):
     content_id = news.get("id")
-    title = news.get("smart_title", "")
-    content = extract_content_from_summary(news.get("summary"))
+    
+    # 优先使用中文内容（content_multilingual.zh）
+    content_multilingual = news.get("content_multilingual", {})
+    zh_content = content_multilingual.get("zh") if isinstance(content_multilingual, dict) else None
+    
+    if zh_content and zh_content.get("title") and zh_content.get("summary"):
+        # 使用中文内容
+        title = zh_content.get("title", "")
+        content = extract_content_from_summary(zh_content.get("summary"))
+        log("publish", "使用中文内容")
+    else:
+        # 回退到英文内容
+        title = news.get("smart_title", "")
+        content = extract_content_from_summary(news.get("summary"))
+        log("publish", "使用英文内容（未找到中文内容）")
     
     final_text = f"【{title}】\n\n{content}\n\n#美股# #财经#"
     
