@@ -100,47 +100,68 @@ def save_cookies(driver):
 
 # ================== API 获取逻辑 ==================
 
-def get_latest_news() -> dict | None:
-    """从配置的 API 获取最新新闻"""
+def get_latest_news_list(limit: int = 10) -> list[dict]:
+    """从配置的 API 获取最新新闻列表（支持批量获取，避免丢失新闻）
+    
+    Args:
+        limit: 获取新闻数量上限（默认10条，根据实际情况：10分钟内最多十几条）
+    
+    Returns:
+        有中文内容的新闻列表，按时间倒序排列
+    """
     if not NEWS_API_URL:
         err("api", "未配置 NEWS_API_URL 环境变量")
-        return None
+        return []
+    
+    # 临时修改 limit 参数，获取多条新闻
+    params = NEWS_PARAMS.copy()
+    params["limit"] = limit
     
     # 调试日志：输出配置信息
     log("api", f"API URL: {NEWS_API_URL}")
-    log("api", f"API 参数: {NEWS_PARAMS}")
+    log("api", f"API 参数: {params}")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json"
     }
     try:
-        resp = requests.get(NEWS_API_URL, params=NEWS_PARAMS, headers=headers, timeout=20, verify=True)
+        resp = requests.get(NEWS_API_URL, params=params, headers=headers, timeout=20, verify=True)
         resp.raise_for_status()
         data = resp.json()
         items = data.get("items", [])
         
         if items:
-            news = items[0]
-            # 调试日志：检查返回的数据结构
-            has_zh = news.get("content_multilingual", {}).get("zh") if isinstance(news.get("content_multilingual"), dict) else None
-            if has_zh:
-                log("api", f"找到中文内容: {has_zh.get('title', '')[:50]}...")
-            else:
-                log("api", "警告：返回的新闻没有中文内容")
-                log("api", f"可用字段: {list(news.keys())}")
-                if news.get("content_multilingual"):
-                    log("api", f"content_multilingual 语言: {list(news.get('content_multilingual', {}).keys())}")
+            log("api", f"获取到 {len(items)} 条新闻")
+            # 检查每条新闻是否有中文内容，过滤出有效的新闻
+            valid_items = []
+            for news in items:
+                has_zh = news.get("content_multilingual", {}).get("zh") if isinstance(news.get("content_multilingual"), dict) else None
+                if has_zh and has_zh.get("title") and has_zh.get("summary"):
+                    log("api", f"找到中文内容: {has_zh.get('title', '')[:50]}...")
+                    valid_items.append(news)
+                else:
+                    log("api", f"跳过无中文内容的新闻: {news.get('id', 'unknown')}")
             
-            return news
+            if valid_items:
+                log("api", f"有效新闻数量: {len(valid_items)}")
+            else:
+                log("api", "警告：所有新闻都没有中文内容")
+            
+            return valid_items
         else:
             log("api", "API 返回的 items 为空")
-            return None
+            return []
     except Exception as e:
         err("api", f"获取新闻失败: {repr(e)}")
         import traceback
         err("api", traceback.format_exc())
-        return None
+        return []
+
+def get_latest_news() -> dict | None:
+    """从配置的 API 获取最新新闻（兼容旧接口，返回单条）"""
+    items = get_latest_news_list(limit=1)
+    return items[0] if items else None
 
 # ================== 发布逻辑 ==================
 
@@ -288,21 +309,36 @@ def main():
             save_cookies(driver)
             log("login", "登录成功，Cookie 已记录")
 
-        # 2. 轮询主循环
+        # 2. 轮询主循环（支持批量处理，避免丢失新闻）
+        # 根据实际情况：10分钟内最多十几条，所以每次获取10条足够覆盖
         while True:
-            news = get_latest_news()
+            # 获取多条新闻（最多10条），避免在发布过程中丢失新新闻
+            news_list = get_latest_news_list(limit=10)
             
-            if news:
-                c_id = news.get("id")
-                if c_id != last_id:
-                    log("main", f"检测到新内容: {c_id}")
-                    if publish_micro(driver, news):
-                        last_id = c_id
-                        last_file.write_text(c_id)
-                        log("main", "发布成功，已更新本地 ID")
-                else:
+            if news_list:
+                published_count = 0
+                for news in news_list:
+                    c_id = news.get("id")
+                    if c_id != last_id:
+                        log("main", f"检测到新内容: {c_id}")
+                        if publish_micro(driver, news):
+                            last_id = c_id
+                            last_file.write_text(c_id)
+                            published_count += 1
+                            log("main", f"发布成功，已更新本地 ID（本次已发布 {published_count} 条）")
+                        else:
+                            log("main", f"发布失败，停止处理后续新闻，等待下次轮询")
+                            break  # 如果发布失败，停止处理后续新闻，等待下次轮询
+                    else:
+                        # 已发布过，跳过
+                        log("main", f"新闻 {c_id} 已发布过，跳过")
+                
+                if published_count == 0:
                     # 视觉反馈：显示当前时间，证明程序没死
                     print(f"\r[{datetime.now().strftime('%H:%M:%S')}] 暂无新内容，等待中...", end="", flush=True)
+            else:
+                # 视觉反馈：显示当前时间，证明程序没死
+                print(f"\r[{datetime.now().strftime('%H:%M:%S')}] 暂无新内容，等待中...", end="", flush=True)
             
             # 倒计时等待，允许 Ctrl+C 退出
             for i in range(FETCH_INTERVAL_SEC, 0, -1):
